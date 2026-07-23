@@ -8,7 +8,10 @@ Routes:
   GET  {base}/tasks
   POST {base}/tasks/{id}:cancel
 
-base = {origin}/a2a/
+Every route above is registered at BOTH the bare origin (e.g.
+https://host/message:send) and under an /a2a/ prefix (e.g.
+https://host/a2a/message:send), so whichever base URL you submit in the
+exam -- with or without a trailing /a2a/ -- resolves correctly.
 
 Design notes
 ------------
@@ -509,15 +512,14 @@ def build_proposals(batch):
 
 def _base_url():
     # Prefer an explicit override (set this env var on Render to the exact
-    # public HTTPS base you submit, e.g. https://<service>.onrender.com/a2a/).
+    # public HTTPS base you submitted in the exam, e.g.
+    # https://<service>.onrender.com -- every route below is registered at
+    # BOTH the bare origin and under /a2a/, so either base works).
     override = os.environ.get("A2A_PUBLIC_BASE_URL")
     if override:
         return override.rstrip("/") + "/"
-    scheme = request.headers.get("X-Forwarded-Proto", request.scheme)
-    if scheme != "https" and request.headers.get("X-Forwarded-Proto"):
-        scheme = request.headers["X-Forwarded-Proto"]
     host = request.headers.get("X-Forwarded-Host", request.host)
-    return f"https://{host}/a2a/"
+    return f"https://{host}/"
 
 
 def _origin_url():
@@ -614,6 +616,7 @@ def _principal():
 # message:send
 # --------------------------------------------------------------------------
 
+@app.route("/message:send", methods=["POST"])
 @app.route("/a2a/message:send", methods=["POST"])
 def message_send():
     fail = _protocol_check()
@@ -780,6 +783,7 @@ def _handle_result_continuation(principal, message, task_id):
 # tasks/{id}, tasks, tasks/{id}:cancel
 # --------------------------------------------------------------------------
 
+@app.route("/tasks/<task_id>", methods=["GET"])
 @app.route("/a2a/tasks/<task_id>", methods=["GET"])
 def get_task(task_id):
     fail = _protocol_check()
@@ -792,6 +796,7 @@ def get_task(task_id):
     return json_response(row["task"], 200)
 
 
+@app.route("/tasks", methods=["GET"])
 @app.route("/a2a/tasks", methods=["GET"])
 def list_tasks():
     fail = _protocol_check()
@@ -802,6 +807,7 @@ def list_tasks():
     return json_response({"tasks": tasks}, 200)
 
 
+@app.route("/tasks/<task_id>:cancel", methods=["POST"])
 @app.route("/a2a/tasks/<task_id>:cancel", methods=["POST"])
 def cancel_task(task_id):
     fail = _protocol_check()
