@@ -511,8 +511,7 @@ def _origin_url():
     return f"https://{host}"
 
 
-@app.route("/.well-known/agent-card.json", methods=["GET"])
-def agent_card():
+def _agent_card_body():
     base = _base_url()
     card = {
         "name": "Invoice Action Agent",
@@ -555,6 +554,12 @@ def agent_card():
         },
         "security": [{"bearerAuth": []}],
     }
+    return card
+
+
+@app.route("/.well-known/agent-card.json", methods=["GET"])
+def agent_card():
+    card = _agent_card_body()
     resp = Response(canonical_json_bytes(card), status=200, mimetype=A2A_MEDIA_TYPE)
     return resp
 
@@ -617,7 +622,11 @@ def message_send():
         return json_response(error_body("invalid_request", "Missing 'message' object."), 400)
 
     message_id = message.get("messageId") or new_id("msg")
-    task_id = message.get("taskId")
+    # We have never actually observed a real continuation request (every
+    # captured grader call so far has been a fresh batch), so don't assume
+    # taskId only lives inside "message" -- also accept it as a sibling of
+    # "message"/"configuration" at the top level of the body.
+    task_id = message.get("taskId") or body.get("taskId")
     message_digest = digest_of(message)
 
     _log_debug({
@@ -871,6 +880,16 @@ def cancel_task(task_id):
 # --------------------------------------------------------------------------
 # misc
 # --------------------------------------------------------------------------
+
+@app.route("/debug/agent-card", methods=["GET"])
+def debug_agent_card():
+    # Mirrors GET /.well-known/agent-card.json exactly, but as plain
+    # application/json so it can be inspected with a generic HTTP client
+    # (the real route must use application/a2a+json, which some tools
+    # can't render). Diagnostic only -- not part of the A2A surface.
+    card = _agent_card_body()
+    return Response(json.dumps(card, indent=2), status=200, mimetype="application/json")
+
 
 @app.route("/debug/log", methods=["GET"])
 def debug_log():
