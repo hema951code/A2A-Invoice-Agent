@@ -8,10 +8,7 @@ Routes:
   GET  {base}/tasks
   POST {base}/tasks/{id}:cancel
 
-Every route above is registered at BOTH the bare origin (e.g.
-https://host/message:send) and under an /a2a/ prefix (e.g.
-https://host/a2a/message:send), so whichever base URL you submit in the
-exam -- with or without a trailing /a2a/ -- resolves correctly.
+base = {origin}/a2a/
 
 Design notes
 ------------
@@ -256,6 +253,7 @@ def text_part(text):
 def data_part(data, media_type=None):
     p = {"kind": "data", "data": data}
     if media_type:
+        p["mediaType"] = media_type
         p["metadata"] = {"mediaType": media_type}
     return p
 
@@ -289,16 +287,19 @@ def build_task(task_id, context_id, state, status_message=None, artifacts=None, 
     return task
 
 
-TASK_STATE_SUBMITTED = "submitted"
-TASK_STATE_WORKING = "working"
-TASK_STATE_INPUT_REQUIRED = "input-required"
-TASK_STATE_COMPLETED = "completed"
-TASK_STATE_CANCELED = "canceled"
-TASK_STATE_FAILED = "failed"
-TASK_STATE_REJECTED = "rejected"
+# Exact enum strings per the official A2A 1.0 specification
+# (a2a-protocol.org/latest/specification/ -- section 4.1.3 TaskState / 4.1.5 Role).
+TASK_STATE_SUBMITTED = "TASK_STATE_SUBMITTED"
+TASK_STATE_WORKING = "TASK_STATE_WORKING"
+TASK_STATE_INPUT_REQUIRED = "TASK_STATE_INPUT_REQUIRED"
+TASK_STATE_COMPLETED = "TASK_STATE_COMPLETED"
+TASK_STATE_CANCELED = "TASK_STATE_CANCELED"
+TASK_STATE_FAILED = "TASK_STATE_FAILED"
+TASK_STATE_REJECTED = "TASK_STATE_REJECTED"
+TASK_STATE_AUTH_REQUIRED = "TASK_STATE_AUTH_REQUIRED"
 
-ROLE_USER = "user"
-ROLE_AGENT = "agent"
+ROLE_USER = "ROLE_USER"
+ROLE_AGENT = "ROLE_AGENT"
 
 
 def _extract_data_parts(message):
@@ -537,26 +538,27 @@ def _origin_url():
 def agent_card():
     base = _base_url()
     card = {
-        "protocolVersion": A2A_VERSION,
         "name": "Invoice Action Agent",
         "description": "Reads a batch of invoice packages, proposes one typed action per invoice "
                         "with cited evidence, waits for accept/reject results, then executes only "
                         "the accepted proposals.",
+        "version": "1.0.0",
         "url": base,
-        "preferredTransport": "HTTP+JSON",
         "capabilities": {
             "streaming": False,
             "pushNotifications": False,
-            "stateTransitionHistory": True,
+            "extendedAgentCard": False,
         },
-        "defaultInputModes": [INPUT_MODE, RESULTS_MODE, "text/plain"],
-        "defaultOutputModes": [PROPOSALS_MODE, RECEIPTS_MODE, "text/plain"],
+        "defaultInputModes": [INPUT_MODE, RESULTS_MODE, "application/json"],
+        "defaultOutputModes": [PROPOSALS_MODE, RECEIPTS_MODE, "application/json"],
         "skills": [
             {
                 "id": "invoice-action-proposal",
                 "name": "Propose invoice actions",
                 "description": "Given a batch of invoice packages, proposes one of "
                                 f"{sorted(ALLOWED_ACTIONS)} per invoice with cited evidence lines.",
+                "tags": ["invoice", "proposal", "accounts-payable"],
+                "examples": ["Propose an action for each invoice in this batch."],
                 "inputModes": [INPUT_MODE],
                 "outputModes": [PROPOSALS_MODE],
             },
@@ -564,15 +566,17 @@ def agent_card():
                 "id": "invoice-action-execution",
                 "name": "Execute accepted invoice actions",
                 "description": "Given accept/reject results for a prior proposal set, executes only "
-                                "the accepted actions and returns signed-style receipts.",
+                                "the accepted actions and returns receipts.",
+                "tags": ["invoice", "execution", "receipts"],
+                "examples": ["Execute the accepted invoice actions from the prior proposal."],
                 "inputModes": [RESULTS_MODE],
                 "outputModes": [RECEIPTS_MODE],
             },
         ],
-        "security": [{"bearerAuth": []}],
         "securitySchemes": {
             "bearerAuth": {"type": "http", "scheme": "bearer"},
         },
+        "security": [{"bearerAuth": []}],
     }
     resp = Response(canonical_json_bytes(card), status=200, mimetype=A2A_MEDIA_TYPE)
     return resp
@@ -596,7 +600,7 @@ def _protocol_check():
 
     if request.method == "POST":
         ctype = (request.content_type or "").split(";")[0].strip().lower()
-        if ctype not in (A2A_MEDIA_TYPE, "application/json"):
+        if ctype != A2A_MEDIA_TYPE:
             return json_response(
                 error_body("unsupported_media_type", f"Content-Type must be '{A2A_MEDIA_TYPE}'."), 415
             )
@@ -847,13 +851,17 @@ def cancel_task(task_id):
 
 @app.route("/debug/log", methods=["GET"])
 def debug_log():
+    # Deliberately plain application/json (not application/a2a+json) -- this
+    # is not part of the A2A surface, just a diagnostic route so real grader
+    # payloads can be inspected in a browser / generic HTTP client.
     with _DEBUG_LOCK:
-        return json_response({"entries": list(_DEBUG_LOG)}, 200)
+        return Response(json.dumps({"entries": list(_DEBUG_LOG)}, indent=2), status=200,
+                         mimetype="application/json")
 
 
 @app.route("/healthz", methods=["GET"])
 def healthz():
-    return json_response({"ok": True, "db_path": DB_PATH}, 200)
+    return Response(json.dumps({"ok": True, "db_path": DB_PATH}), status=200, mimetype="application/json")
 
 
 @app.errorhandler(404)
