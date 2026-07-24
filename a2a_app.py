@@ -616,11 +616,15 @@ def message_send():
     if not isinstance(message, dict):
         return json_response(error_body("invalid_request", "Missing 'message' object."), 400)
 
-    _log_debug({"route": "message:send", "principal": principal, "body": body})
-
     message_id = message.get("messageId") or new_id("msg")
     task_id = message.get("taskId")
     message_digest = digest_of(message)
+
+    _log_debug({
+        "route": "message:send", "principal": principal, "messageId": message_id,
+        "taskId": task_id, "bodyBytes": len(canonical_json_bytes(body)),
+        "partsMediaTypes": [mt for _, mt in _extract_data_parts(message)],
+    })
 
     cached = get_idempotent(principal, message_id)
     if cached is not None:
@@ -630,10 +634,42 @@ def message_send():
             error_body("conflict", "messageId reused with different content."), 409
         )
 
-    if task_id:
-        status_code, resp_body = _handle_result_continuation(principal, message, task_id)
-    else:
-        status_code, resp_body = _handle_new_batch(principal, message)
+    try:
+        if task_id:
+            status_code, resp_body = _handle_result_continuation(principal, message, task_id)
+        else:
+            status_code, resp_body = _handle_new_batch(principal, message)
+    except Exception as exc:
+        import traceback
+        tb = traceback.format_exc()
+        _log_debug({"route": "message:send", "principal": principal, "messageId": message_id,
+                    "EXCEPTION": str(exc), "traceback": tb})
+        return json_response(error_body("internal_error", f"{type(exc).__name__}: {exc}"), 500)
+
+    resp_bytes = len(canonical_json_bytes(resp_body))
+    proposals_summary = None
+    receipts_summary = None
+    if isinstance(resp_body, dict):
+        for art in resp_body.get("artifacts", []) or []:
+            for part in art.get("parts", []) or []:
+                d = part.get("data") if isinstance(part, dict) else None
+                if isinstance(d, dict) and "proposals" in d:
+                    proposals_summary = [{"packageId": p.get("packageId"), "action": p.get("action")}
+                                          for p in d.get("proposals", [])]
+                if isinstance(d, dict) and "outcomes" in d:
+                    receipts_summary = [{"packageId": o.get("packageId"), "status": o.get("status")}
+                                         for o in d.get("outcomes", [])]
+    _log_debug({
+        "route": "message:send/response", "principal": principal, "messageId": message_id,
+        "status": status_code, "respBytes": resp_bytes,
+        "respKind": resp_body.get("kind") if isinstance(resp_body, dict) else None,
+        "respId": resp_body.get("id") if isinstance(resp_body, dict) else None,
+        "respState": (resp_body.get("status") or {}).get("state") if isinstance(resp_body, dict) else None,
+        "numArtifacts": len(resp_body.get("artifacts", [])) if isinstance(resp_body, dict) else None,
+        "proposalsSummary": proposals_summary,
+        "receiptsSummary": receipts_summary,
+        "errorBody": resp_body if (isinstance(resp_body, dict) and "error" in resp_body) else None,
+    })
 
     save_idempotent(principal, message_id, message_digest, resp_body, status_code)
     return json_response(resp_body, status_code)
