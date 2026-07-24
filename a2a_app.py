@@ -260,6 +260,7 @@ def data_part(data, media_type=None):
 
 def build_message(role, parts, message_id=None, context_id=None, task_id=None):
     msg = {
+        "kind": "message",
         "messageId": message_id or new_id("msg"),
         "role": role,
         "parts": parts,
@@ -276,6 +277,7 @@ def build_task(task_id, context_id, state, status_message=None, artifacts=None, 
     if status_message is not None:
         status["message"] = status_message
     task = {
+        "kind": "task",
         "id": task_id,
         "contextId": context_id,
         "status": status,
@@ -674,7 +676,13 @@ def _handle_new_batch(principal, message):
 
     save_task(task_id, context_id, principal, TASK_STATE_INPUT_REQUIRED, task,
               batch_id=batch_id, proposals=proposals)
-    return 200, {"task": task}
+    # Return the Task object directly (not wrapped in {"task": ...}) -- this
+    # matches both the official A2A spec (SendMessageResponse.result is the
+    # Task/Message itself) and our own GET /tasks/{id} route, which already
+    # returns the raw Task. The two were previously inconsistent with each
+    # other, which is very likely why lifecycle/business/receipts checks
+    # could not find "id"/"status"/"artifacts" at the top level.
+    return 200, task
 
 
 def _handle_result_continuation(principal, message, task_id):
@@ -685,9 +693,9 @@ def _handle_result_continuation(principal, message, task_id):
         return 404, error_body("not_found", "Unknown taskId.")
 
     if row["canceled"]:
-        return 200, {"task": row["task"]}
+        return 200, row["task"]
     if row["completed"]:
-        return 200, {"task": row["task"]}
+        return 200, row["task"]
 
     data_parts = _extract_data_parts(message)
     results_payload = None
@@ -709,7 +717,7 @@ def _handle_result_continuation(principal, message, task_id):
 
     if not try_claim_terminal(task_id, "complete"):
         fresh = load_task_row(task_id)
-        return 200, {"task": fresh["task"]}
+        return 200, fresh["task"]
 
     outcomes = []
     for r in results:
@@ -759,7 +767,7 @@ def _handle_result_continuation(principal, message, task_id):
         history=history,
     )
     save_task(task_id, context_id, principal, TASK_STATE_COMPLETED, task, completed=True)
-    return 200, {"task": task}
+    return 200, task
 
 
 # --------------------------------------------------------------------------
